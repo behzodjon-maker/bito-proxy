@@ -8,24 +8,40 @@ app.use(cors());
 const TARGET_HOST = '65.21.188.215';
 
 app.use('/proxy', (req, res) => {
+  const fullUrl = new URL(req.url, `https://${TARGET_HOST}`);
+
+  // Allow passing the token as ?_auth_token=... for easy browser testing
+  const tokenFromQuery = fullUrl.searchParams.get('_auth_token');
+  fullUrl.searchParams.delete('_auth_token');
+
+  const authHeader = tokenFromQuery
+    ? `Bearer ${tokenFromQuery}`
+    : (req.headers['authorization'] || '');
+
   const options = {
     hostname: TARGET_HOST,
     port: 443,
-    path: req.url,
+    path: fullUrl.pathname + fullUrl.search,
     method: req.method,
     headers: {
-      Authorization: req.headers['authorization'] || '',
+      Authorization: authHeader,
       Accept: 'application/json',
     },
     rejectUnauthorized: false,
   };
 
   const proxyReq = https.request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
+    let data = [];
+    proxyRes.on('data', (chunk) => data.push(chunk));
+    proxyRes.on('end', () => {
+      const body = Buffer.concat(data).toString();
+      res.writeHead(proxyRes.statusCode, {
+        'Content-Type': proxyRes.headers['content-type'] || 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'X-Proxy-Target-Status': proxyRes.statusCode,
+      });
+      res.end(body);
     });
-    proxyRes.pipe(res);
   });
 
   proxyReq.on('error', (err) => {
